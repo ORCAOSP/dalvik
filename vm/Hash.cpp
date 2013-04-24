@@ -290,11 +290,9 @@ bool dvmHashTableRemove(HashTable* pHashTable, u4 itemHash, void* item)
  */
 int dvmHashForeachRemove(HashTable* pHashTable, HashForeachRemoveFunc func)
 {
-    int i, val, tableSize;
+    int i, val;
 
-    tableSize = pHashTable->tableSize;
-
-    for (i = 0; i < tableSize; i++) {
+    for (i = 0; i < pHashTable->tableSize; i++) {
         HashEntry* pEnt = &pHashTable->pEntries[i];
 
         if (pEnt->data != NULL && pEnt->data != HASH_TOMBSTONE) {
@@ -320,11 +318,9 @@ int dvmHashForeachRemove(HashTable* pHashTable, HashForeachRemoveFunc func)
  */
 int dvmHashForeach(HashTable* pHashTable, HashForeachFunc func, void* arg)
 {
-    int i, val, tableSize;
+    int i, val;
 
-    tableSize = pHashTable->tableSize;
-
-    for (i = 0; i < tableSize; i++) {
+    for (i = 0; i < pHashTable->tableSize; i++) {
         HashEntry* pEnt = &pHashTable->pEntries[i];
 
         if (pEnt->data != NULL && pEnt->data != HASH_TOMBSTONE) {

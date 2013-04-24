@@ -232,7 +232,6 @@ static void Dalvik_dalvik_system_DexFile_openDexFile(const u4* args,
         free(sourceName);
     }
 
-    free(outputName);
     RETURN_PTR(pDexOrJar);
 }
 

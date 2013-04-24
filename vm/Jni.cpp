@@ -134,11 +134,6 @@ The GC will scan all references in the table.
 
 */
 
-static void ReportJniError() {
-    dvmDumpThread(dvmThreadSelf(), false);
-    dvmAbort();
-}
-
 #ifdef WITH_JNI_STACK_CHECK
 # define COMPUTE_STACK_SUM(_self)   computeStackSum(_self);
 # define CHECK_STACK_SUM(_self)     checkStackSum(_self);
@@ -182,7 +177,7 @@ static void checkStackSum(Thread* self) {
             ALOGD("JNI: bad stack CRC (0x%08x) -- okay during JNI_OnLoad", stackCrc);
         } else {
             ALOGW("JNI: bad stack CRC (%08x vs %08x)", crc, stackCrc);
-            ReportJniError();
+            dvmAbort();
         }
     }
     self->stackCrc = (u4) -1;       /* make logic errors more noticeable */
@@ -323,7 +318,7 @@ Object* dvmDecodeIndirectRef(Thread* self, jobject jobj) {
             Object* result = self->jniLocalRefTable.get(jobj);
             if (UNLIKELY(result == NULL)) {
                 ALOGE("JNI ERROR (app bug): use of deleted local reference (%p)", jobj);
-                ReportJniError();
+                dvmAbort();
             }
             return result;
         }
@@ -335,7 +330,7 @@ Object* dvmDecodeIndirectRef(Thread* self, jobject jobj) {
             Object* result = pRefTable->get(jobj);
             if (UNLIKELY(result == NULL)) {
                 ALOGE("JNI ERROR (app bug): use of deleted global reference (%p)", jobj);
-                ReportJniError();
+                dvmAbort();
             }
             return result;
         }
@@ -349,7 +344,7 @@ Object* dvmDecodeIndirectRef(Thread* self, jobject jobj) {
                 result = NULL;
             } else if (UNLIKELY(result == NULL)) {
                 ALOGE("JNI ERROR (app bug): use of deleted weak global reference (%p)", jobj);
-                ReportJniError();
+                dvmAbort();
             }
             return result;
         }
@@ -360,7 +355,7 @@ Object* dvmDecodeIndirectRef(Thread* self, jobject jobj) {
             return reinterpret_cast<Object*>(jobj);
         }
         ALOGW("Invalid indirect reference %p in decodeIndirectRef", jobj);
-        ReportJniError();
+        dvmAbort();
         return kInvalidIndirectRefObject;
     }
 }
@@ -368,7 +363,8 @@ Object* dvmDecodeIndirectRef(Thread* self, jobject jobj) {
 static void AddLocalReferenceFailure(IndirectRefTable* pRefTable) {
     pRefTable->dump("JNI local");
     ALOGE("Failed adding to JNI local ref table (has %zd entries)", pRefTable->capacity());
-    ReportJniError(); // spec says call FatalError; this is equivalent
+    dvmDumpThread(dvmThreadSelf(), false);
+    dvmAbort();     // spec says call FatalError; this is equivalent
 }
 
 /*
@@ -392,7 +388,6 @@ static inline jobject addLocalReference(Thread* self, Object* obj) {
     if (UNLIKELY(jobj == NULL)) {
         AddLocalReferenceFailure(pRefTable);
     }
-
     if (UNLIKELY(gDvmJni.workAroundAppJniBugs)) {
         // Hand out direct pointers to support broken old apps.
         return reinterpret_cast<jobject>(obj);
@@ -491,7 +486,7 @@ static jobject addGlobalReference(Object* obj) {
         gDvm.jniGlobalRefTable.dump("JNI global");
         ALOGE("Failed adding to JNI global ref table (%zd entries)",
                 gDvm.jniGlobalRefTable.capacity());
-        ReportJniError();
+        dvmAbort();
     }
 
     LOGVV("GREF add %p  (%s.%s)", obj,
@@ -514,7 +509,7 @@ static jobject addGlobalReference(Object* obj) {
                 } else {
                     gDvm.jniGlobalRefTable.dump("JNI global");
                     ALOGE("Excessive JNI global references (%d)", count);
-                    ReportJniError();
+                    dvmAbort();
                 }
             }
         }
@@ -533,7 +528,7 @@ static jobject addWeakGlobalReference(Object* obj) {
     if (jobj == NULL) {
         gDvm.jniWeakGlobalRefTable.dump("JNI weak global");
         ALOGE("Failed adding to JNI weak global ref table (%zd entries)", table->capacity());
-        ReportJniError();
+        dvmAbort();
     }
     return jobj;
 }
@@ -596,7 +591,8 @@ static void pinPrimitiveArray(ArrayObject* arrayObj) {
         dvmDumpReferenceTable(&gDvm.jniPinRefTable, "JNI pinned array");
         ALOGE("Failed adding to JNI pinned array ref table (%d entries)",
            (int) dvmReferenceTableEntries(&gDvm.jniPinRefTable));
-        ReportJniError();
+        dvmDumpThread(dvmThreadSelf(), false);
+        dvmAbort();
     }
 
     /*
@@ -962,14 +958,14 @@ static void trackMonitorEnter(Thread* self, Object* obj) {
 
         if (!dvmInitReferenceTable(refTable, kInitialSize, INT_MAX)) {
             ALOGE("Unable to initialize monitor tracking table");
-            ReportJniError();
+            dvmAbort();
         }
     }
 
     if (!dvmAddToReferenceTable(refTable, obj)) {
         /* ran out of memory? could throw exception instead */
         ALOGE("Unable to add entry to monitor tracking table");
-        ReportJniError();
+        dvmAbort();
     } else {
         LOGVV("--- added monitor %p", obj);
     }
@@ -1406,7 +1402,7 @@ static void ExceptionClear(JNIEnv* env) {
 static void FatalError(JNIEnv* env, const char* msg) {
     //dvmChangeStatus(NULL, THREAD_RUNNING);
     ALOGE("JNI posting fatal error: %s", msg);
-    ReportJniError();
+    dvmAbort();
 }
 
 /*
@@ -2687,18 +2683,12 @@ static jobjectRefType GetObjectRefType(JNIEnv* env, jobject jobj) {
 
 /*
  * Allocate and return a new java.nio.ByteBuffer for this block of memory.
+ *
+ * "address" may not be NULL, and "capacity" must be > 0.  (These are only
+ * verified when CheckJNI is enabled.)
  */
 static jobject NewDirectByteBuffer(JNIEnv* env, void* address, jlong capacity) {
     ScopedJniThreadState ts(env);
-
-    if (capacity < 0) {
-        ALOGE("JNI ERROR (app bug): negative buffer capacity: %lld", capacity);
-        ReportJniError();
-    }
-    if (address == NULL && capacity != 0) {
-        ALOGE("JNI ERROR (app bug): non-zero capacity for NULL pointer: %lld", capacity);
-        ReportJniError();
-    }
 
     /* create an instance of java.nio.ReadWriteDirectByteBuffer */
     ClassObject* bufferClazz = gDvm.classJavaNioReadWriteDirectByteBuffer;

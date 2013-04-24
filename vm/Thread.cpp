@@ -1301,8 +1301,8 @@ bool dvmCreateInterpThread(Object* threadObj, int reqStackSize)
 
     ThreadStatus oldStatus = dvmChangeStatus(self, THREAD_VMWAIT);
     pthread_t threadHandle;
-    int cc = pthread_create(&threadHandle, &threadAttr, interpThreadStart, newThread);
-    pthread_attr_destroy(&threadAttr);
+    int cc = pthread_create(&threadHandle, &threadAttr, interpThreadStart,
+                            newThread);
     dvmChangeStatus(self, oldStatus);
 
     if (cc != 0) {
@@ -1636,6 +1636,7 @@ bool dvmCreateInternalThread(pthread_t* pHandle, const char* name,
 {
     InternalStartArgs* pArgs;
     Object* systemGroup;
+    pthread_attr_t threadAttr;
     volatile Thread* newThread = NULL;
     volatile int createStatus = 0;
 
@@ -1652,12 +1653,12 @@ bool dvmCreateInternalThread(pthread_t* pHandle, const char* name,
     pArgs->pThread = &newThread;
     pArgs->pCreateStatus = &createStatus;
 
-    pthread_attr_t threadAttr;
     pthread_attr_init(&threadAttr);
+    //pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
 
-    int cc = pthread_create(pHandle, &threadAttr, internalThreadStart, pArgs);
-    pthread_attr_destroy(&threadAttr);
-    if (cc != 0) {
+    if (pthread_create(pHandle, &threadAttr, internalThreadStart,
+            pArgs) != 0)
+    {
         ALOGE("internal thread creation failed");
         free(pArgs->name);
         free(pArgs);
@@ -2152,10 +2153,6 @@ void dvmDetachCurrentThread()
             // cond var guarded by threadListLock, which we already hold
             cc = pthread_cond_signal(&gDvm.vmExitCond);
             assert(cc == 0);
-#ifdef NDEBUG
-            // not used -> variable defined but not used warning
-            (void)cc;
-#endif
         }
     }
 
@@ -2713,10 +2710,6 @@ void dvmResumeAllThreads(SuspendCause why)
     lockThreadSuspendCount();
     cc = pthread_cond_broadcast(&gDvm.threadSuspendCountCond);
     assert(cc == 0);
-#ifdef NDEBUG
-    // not used -> variable defined but not used warning
-    (void)cc;
-#endif
     unlockThreadSuspendCount();
 
     LOG_THREAD("threadid=%d: ResumeAll complete", self->threadId);
@@ -2766,10 +2759,6 @@ void dvmUndoDebuggerSuspensions()
     lockThreadSuspendCount();
     cc = pthread_cond_broadcast(&gDvm.threadSuspendCountCond);
     assert(cc == 0);
-#ifdef NDEBUG
-    // not used -> variable defined but not used warning
-    (void)cc;
-#endif
     unlockThreadSuspendCount();
 
     unlockThreadSuspend();

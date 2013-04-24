@@ -598,10 +598,6 @@ static Object* convertReturnType(Object* valueObj, ClassObject* methodReturn)
     }
     ALOGV("HEY: converting valueObj from [%s to [%s",
         srcElemClass->descriptor, dstElemClass->descriptor);
-#ifdef LOG_NDEBUG
-    // variable defined but not used => breakage on -Werror
-    (void)srcElemClass;
-#endif
 
     ArrayObject* srcArray = (ArrayObject*) valueObj;
     u4 length = srcArray->length;
@@ -762,7 +758,6 @@ static Object* processEncodedAnnotation(const ClassObject* clazz,
             ALOGE("Unable to resolve %s annotation class %d",
                 clazz->descriptor, typeIdx);
             assert(dvmCheckException(self));
-            dvmClearException(self);
             return NULL;
         }
     }
@@ -835,6 +830,9 @@ static ArrayObject* processAnnotationSet(const ClassObject* clazz,
 {
     DexFile* pDexFile = clazz->pDvmDex->pDexFile;
     const DexAnnotationItem* pAnnoItem;
+    ArrayObject* annoArray;
+    int i, count;
+    u4 dstIndex;
 
     /* we need these later; make sure they're initialized */
     if (!dvmIsClassInitialized(gDvm.classOrgApacheHarmonyLangAnnotationAnnotationFactory))
@@ -843,56 +841,38 @@ static ArrayObject* processAnnotationSet(const ClassObject* clazz,
         dvmInitClass(gDvm.classOrgApacheHarmonyLangAnnotationAnnotationMember);
 
     /* count up the number of visible elements */
-    size_t count = 0;
-    for (size_t i = 0; i < pAnnoSet->size; ++i) {
+    for (i = count = 0; i < (int) pAnnoSet->size; i++) {
         pAnnoItem = dexGetAnnotationItem(pDexFile, pAnnoSet, i);
-        if (pAnnoItem->visibility == visibility) {
+        if (pAnnoItem->visibility == visibility)
             count++;
-        }
     }
 
-    ArrayObject* annoArray = dvmAllocArrayByClass(gDvm.classJavaLangAnnotationAnnotationArray,
-                                                  count, ALLOC_DEFAULT);
-    if (annoArray == NULL) {
+    annoArray =
+        dvmAllocArrayByClass(gDvm.classJavaLangAnnotationAnnotationArray,
+                             count, ALLOC_DEFAULT);
+    if (annoArray == NULL)
         return NULL;
-    }
 
     /*
      * Generate Annotation objects.  We must put them into the array
      * immediately (or add them to the tracked ref table).
-     * We may not be able to resolve all annotations, and should just
-     * ignore those we can't.
      */
-    u4 dstIndex = 0;
-    for (int i = 0; i < (int) pAnnoSet->size; i++) {
+    dstIndex = 0;
+    for (i = 0; i < (int) pAnnoSet->size; i++) {
         pAnnoItem = dexGetAnnotationItem(pDexFile, pAnnoSet, i);
         if (pAnnoItem->visibility != visibility)
             continue;
         const u1* ptr = pAnnoItem->annotation;
         Object *anno = processEncodedAnnotation(clazz, &ptr);
-        if (anno != NULL) {
-            dvmSetObjectArrayElement(annoArray, dstIndex, anno);
-            ++dstIndex;
+        if (anno == NULL) {
+            dvmReleaseTrackedAlloc((Object*) annoArray, NULL);
+            return NULL;
         }
+        dvmSetObjectArrayElement(annoArray, dstIndex, anno);
+        ++dstIndex;
     }
 
-    // If we got as many as we expected, we're done...
-    if (dstIndex == count) {
-        return annoArray;
-    }
-
-    // ...otherwise we need to trim the trailing nulls.
-    ArrayObject* trimmedArray = dvmAllocArrayByClass(gDvm.classJavaLangAnnotationAnnotationArray,
-                                                     dstIndex, ALLOC_DEFAULT);
-    if (trimmedArray == NULL) {
-        return NULL;
-    }
-    for (size_t i = 0; i < dstIndex; ++i) {
-        Object** src = (Object**)(void*) annoArray->contents;
-        dvmSetObjectArrayElement(trimmedArray, i, src[i]);
-    }
-    dvmReleaseTrackedAlloc((Object*) annoArray, NULL);
-    return trimmedArray;
+    return annoArray;
 }
 
 /*
@@ -928,12 +908,7 @@ static const DexAnnotationItem* getAnnotationItemFromAnnotationSet(
         if (annoClass == NULL) {
             annoClass = dvmResolveClass(clazz, typeIdx, true);
             if (annoClass == NULL) {
-                ALOGE("Unable to resolve %s annotation class %d",
-                      clazz->descriptor, typeIdx);
-                Thread* self = dvmThreadSelf();
-                assert(dvmCheckException(self));
-                dvmClearException(self);
-                continue;
+                return NULL; // an exception is pending
             }
         }
 
@@ -1126,9 +1101,9 @@ static const u1* searchEncodedAnnotation(const ClassObject* clazz,
     const u1* ptr, const char* name)
 {
     DexFile* pDexFile = clazz->pDvmDex->pDexFile;
-    u4 /*typeIdx,*/ size;
+    u4 typeIdx, size;
 
-    /*typeIdx =*/ readUleb128(&ptr);
+    typeIdx = readUleb128(&ptr);
     size = readUleb128(&ptr);
     //printf("#####   searching ptr=%p type=%u size=%u\n", ptr, typeIdx, size);
 
@@ -1966,22 +1941,17 @@ static u4 getFieldIdx(const Field* field)
 static const DexAnnotationSetItem* findAnnotationSetForField(const Field* field)
 {
     ClassObject* clazz = field->clazz;
-    DvmDex* pDvmDex = clazz->pDvmDex;
-    if (pDvmDex == NULL) {
-        return NULL;
-    }
+    DexFile* pDexFile = clazz->pDvmDex->pDexFile;
+    const DexAnnotationsDirectoryItem* pAnnoDir;
+    const DexFieldAnnotationsItem* pFieldList;
 
-    DexFile* pDexFile = pDvmDex->pDexFile;
-
-    const DexAnnotationsDirectoryItem* pAnnoDir = getAnnoDirectory(pDexFile, clazz);
-    if (pAnnoDir == NULL) {
+    pAnnoDir = getAnnoDirectory(pDexFile, clazz);
+    if (pAnnoDir == NULL)
         return NULL;
-    }
 
-    const DexFieldAnnotationsItem* pFieldList = dexGetFieldAnnotations(pDexFile, pAnnoDir);
-    if (pFieldList == NULL) {
+    pFieldList = dexGetFieldAnnotations(pDexFile, pAnnoDir);
+    if (pFieldList == NULL)
         return NULL;
-    }
 
     /*
      * Run through the list and find a matching field.  We compare the
